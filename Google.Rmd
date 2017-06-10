@@ -1,0 +1,160 @@
+---
+title: "Google Stock Price Forecasting"
+author: "Ushnik"
+date: "6/7/2017"
+output: html_document
+---
+This analysis consists of historical stock price data from when Google went public in August of 2004, and forecasts future prices. The data set has been extracted from Yahoo Finance and includes monthly average values. A time series model used to estimate the values within different confidence bands.
+
+```{r}
+
+
+library(timeSeries)
+library(timeDate)
+library(ggplot2)
+library(ggfortify)
+require(graphics)
+require(timeSeries)
+library(lubridate)
+
+google <- read.csv("/Users/ushnikdasgupta/Downloads/GOOG (5).csv", header=TRUE, stringsAsFactors=FALSE)
+names(google)
+str(google)
+head(google)
+summary(google)
+Date<-as.Date(google$Date, "%m/%d/%Y")
+google$Date<-Date
+str(google)
+View(google)
+
+```
+
+The data set contains monthly average stock prices of ranging over 154 months - September 2004 to June 2017
+
+##Time Series
+
+The Adjusted Close values are stored in a time series object `ts.google`, and is then plotted 
+
+```{r}
+
+ts.google<-ts(google$Adj.Close,  start=c(2004,9), frequency = 12) 
+ts.google
+
+plot.ts(ts.google, ylab= "Google Stock Price")
+
+```
+
+##Decomposing, Holt Smoothening and Forcasting
+
+The time series object is decomposed to analyze patterns (seasonal, random and trends) within the plot. The Holt Smoothening technique helps bridge two data points and takes their mean to form a new Forecasted time series plot.
+
+``` {r}
+
+library(forecast)
+
+ts.google.d <- decompose(ts.google)
+plot(ts.google.d)
+
+ts.google.holt <- HoltWinters(ts.google, gamma=TRUE)
+plot(ts.google.holt, ylab="Google Stock Prices", xlab="Year")
+ts.google.forecasts <- forecast.HoltWinters(ts.google.holt, h=12)  
+
+plot.forecast(ts.google.forecasts, ylab="Google Stock Prices", xlab="Year")
+ts.google.forecasts
+
+```
+
+From point forecasts above, an ideal investment over the next one year would involve buying stocks in August 2017 @ $999.97/stock, and selling them in May 2018 @ 1071.83/stock. There could however always be a variance in these values, as indicated by the 80% and 95% confidence limit (bith low and high) values.
+
+##ARIMA Forecast Model
+
+The ARIMA (Autoregressive Integrated Moving Average) model provides a parsimonious description of a stationary stochastic process in terms of two polynomials, one for the autoregression and the second for the moving average. This helps in providing another model with values that help in supporting the previous conclusion
+
+```{r}
+
+auto.arima(ts.google)
+google.arima<-arima(ts.google, c(0,1,0))   
+google.arima.forecasts <- forecast.Arima(google.arima, h=12)
+
+google.arima.forecasts
+plot(google.arima.forecasts)
+
+```
+The `forecast errors` are calculated as the observed values minus predicted values, for each time point. We can only calculate the forecast errors for the time period covered by the original time series (Sep 2004 to June 2017). As mentioned above, one measure of the accuracy of the predictive model is the sum-of-squared-errors (SSE) for the in-sample forecast errors.
+
+The in-sample forecast errors are stored in the named element `residuals` of the list variable returned by `forecast.HoltWinters()`. If the predictive model cannot be improved upon, there should be no correlations between forecast errors for successive predictions. In other words, if there are correlations between forecast errors for successive predictions, it is likely that the simple exponential smoothing forecasts could be improved upon by another forecasting technique.
+
+To figure out whether this is the case, we can obtain a correlogram of the in-sample forecast errors for lags 1-100. We can calculate a correlogram of the forecast errors using the `acf()` function in R. To specify the maximum lag that we want to look at, we use the `lag.max` parameter in `acf()`.
+
+We calculate a correlogram of the forecast errors for the stock price data for lags 1-100:
+
+```{r}
+
+acf(google.arima.forecasts$residuals, lag.max=100)
+
+```
+
+We can see from the correlogram that there are no autocorrelations for a maximum lag of 100. To further test whether there is significant evidence for non-zero correlations at lags 1-100, we can carry out a Ljung-Box test. This can be done in R using the `Box.test()` function. The maximum lag that we want to look at is specified using the `lag` parameter in the `Box.test()` function. We therefore test whether there are non-zero autocorrelations at lags 1-100, for the in-sample forecast errors for the stock price data:
+
+```{r}
+
+Box.test(google.arima.forecasts$residuals, lag=100, type="Ljung-Box")
+
+```
+
+Here the Ljung-Box test statistic is 89.225, and the p-value is 0.77, so there is little evidence of non-zero autocorrelations in the in-sample forecast errors at lags 1-100.
+
+To be sure that the predictive model cannot be improved upon, it is also a good idea to check whether the forecast errors are normally distributed with mean zero and constant variance. To check whether the forecast errors have constant variance, we can make a time plot of the in-sample forecast errors:
+
+```{r}
+plot.ts(google.arima.forecasts$residuals)  
+
+```
+
+The plot shows that the in-sample forecast errors do not seem to have a constant variance over time, although the size of the fluctuations in the start of the time series may be slightly less than that at later dates.
+
+We therefore difference the given forecast once to obtain constant variance over time. This is also supported by the auto.arima function predicting a integrated variable "d" as 1.
+
+```{r}
+
+google.diff <- diff(google.arima.forecasts$residuals, differences = 1)
+plot.ts(google.diff)
+
+```
+
+This plot has a more constant variance than the previous plot. 
+
+To check whether the forecast errors are normally distributed with mean zero, we can plot a histogram of the forecast errors, with an overlaid normal curve that has mean zero and the same standard deviation as the distribution of forecast errors. 
+
+```{r}
+
+PlotForecastErrors <- function(forecasterrors)
+{
+  mybinsize <- IQR(forecasterrors)/4
+  mysd <- sd(forecasterrors)
+  mymin <- min(forecasterrors)-mysd*5
+  mymax <- max(forecasterrors)+mysd*5
+  mynorm <- rnorm(10000,mean=0,sd=mysd)
+  mymin2 <- min(mynorm)
+  mymax2 <- max(mynorm)
+  if (mymin2<mymin)
+  {
+    mymin<-mymin2
+  }
+  if (mymax2>mymax)
+  {
+    mymax<-mymax2
+  }
+  mybins <- seq(mymin,mymax,mybinsize)
+  hist(forecasterrors, col="red", freq=FALSE, breaks=mybins)
+  myhist <- hist(mynorm, plot=FALSE, breaks=mybins)
+  points(myhist$mids, myhist$density, type="l", col="blue", lwd=2)
+}
+
+PlotForecastErrors(google.arima.forecasts$residuals)
+```
+
+The plot shows that the distribution of forecast errors is roughly centred on zero (supported by the mean function), and is more or less normally distributed and so it is plausible that the forecast errors are normally distributed with mean zero.
+
+The Ljung-Box test showed that there is little evidence of non-zero autocorrelations in the in-sample forecast errors, and the distribution of forecast errors seems to be normally distributed with mean zero. This suggests that the simple exponential smoothing method provides an adequate predictive model for the exchange rates, which probably cannot be improved upon. Furthermore, the assumptions that the 80% and 95% predictions intervals were based upon (that there are no autocorrelations in the forecast errors, and the forecast errors are normally distributed with mean zero and constant variance) are probably valid too.
+
